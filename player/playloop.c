@@ -1023,8 +1023,8 @@ int handle_force_window(struct MPContext *mpctx, bool force)
                 break;
             }
         }
-        int w = 960;
-        int h = 480;
+        int w = 1152;
+        int h = 720;
         struct mp_image_params p = {
             .imgfmt = config_format,
             .w = w,   .h = h,
