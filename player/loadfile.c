@@ -1487,7 +1487,7 @@ static void play_current_file(struct MPContext *mpctx)
 
     handle_force_window(mpctx, false);
 
-    if (mpctx->playlist->num_entries > 1 ||
+    if (mpctx->playlist->num_entries >= 1 ||
         mpctx->playing->num_redirects)
         MP_INFO(mpctx, "Playing: %s\n", mpctx->filename);
 
@@ -1984,4 +1984,3 @@ void open_recorder(struct MPContext *mpctx, bool on_init)
 
     talloc_free(streams);
 }
-
