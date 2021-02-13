@@ -1645,7 +1645,7 @@ static void play_current_file(struct MPContext *mpctx)
 
     handle_force_window(mpctx, false);
 
-    if (mpctx->playlist->num_entries > 1 ||
+    if (mpctx->playlist->num_entries >= 1 ||
         mpctx->playing->playlist_path)
         MP_INFO(mpctx, "Playing: %s\n", mpctx->filename);
 
@@ -2063,4 +2063,94 @@ void mp_set_playlist_entry(struct MPContext *mpctx, struct playlist_entry *e)
     if (mpctx->stop_play != PT_QUIT)
         mpctx->stop_play = e ? PT_CURRENT_ENTRY : PT_STOP;
     mp_wakeup_core(mpctx);
+}
+
+static void set_track_recorder_sink(struct track *track,
+                                    struct mp_recorder_sink *sink)
+{
+    if (track->d_sub)
+        sub_set_recorder_sink(track->d_sub, sink);
+    if (track->dec)
+        track->dec->recorder_sink = sink;
+    track->remux_sink = sink;
+}
+
+void close_recorder(struct MPContext *mpctx)
+{
+    if (!mpctx->recorder)
+        return;
+
+    for (int n = 0; n < mpctx->num_tracks; n++)
+        set_track_recorder_sink(mpctx->tracks[n], NULL);
+
+    mp_recorder_destroy(mpctx->recorder);
+    mpctx->recorder = NULL;
+}
+
+// Like close_recorder(), but also unset the option. Intended for use on errors.
+void close_recorder_and_error(struct MPContext *mpctx)
+{
+    close_recorder(mpctx);
+    talloc_free(mpctx->opts->record_file);
+    mpctx->opts->record_file = NULL;
+    m_config_notify_change_opt_ptr(mpctx->mconfig, &mpctx->opts->record_file);
+    MP_ERR(mpctx, "Disabling stream recording.\n");
+}
+
+void open_recorder(struct MPContext *mpctx, bool on_init)
+{
+    if (!mpctx->playback_initialized)
+        return;
+
+    close_recorder(mpctx);
+
+    char *target = mpctx->opts->record_file;
+    if (!target || !target[0])
+        return;
+
+    struct sh_stream **streams = NULL;
+    int num_streams = 0;
+
+    for (int n = 0; n < mpctx->num_tracks; n++) {
+        struct track *track = mpctx->tracks[n];
+        if (track->stream && track->selected && (track->d_sub || track->dec))
+            MP_TARRAY_APPEND(NULL, streams, num_streams, track->stream);
+    }
+
+    struct demux_attachment **attachments = talloc_array(NULL, struct demux_attachment*, mpctx->demuxer->num_attachments);
+    for (int n = 0; n < mpctx->demuxer->num_attachments; n++) {
+        attachments[n] = &mpctx->demuxer->attachments[n];
+    }
+
+    mpctx->recorder = mp_recorder_create(mpctx->global, mpctx->opts->record_file,
+                                         streams, num_streams,
+                                         attachments, mpctx->demuxer->num_attachments);
+
+    if (!mpctx->recorder) {
+        talloc_free(streams);
+        talloc_free(attachments);
+        close_recorder_and_error(mpctx);
+        return;
+    }
+
+    if (!on_init)
+        mp_recorder_mark_discontinuity(mpctx->recorder);
+
+    int n_stream = 0;
+    for (int n = 0; n < mpctx->num_tracks; n++) {
+        struct track *track = mpctx->tracks[n];
+        if (n_stream >= num_streams)
+            break;
+        // (We expect track->stream not to be reused on other tracks.)
+        if (track->stream == streams[n_stream]) {
+            struct mp_recorder_sink * sink =
+                mp_recorder_get_sink(mpctx->recorder, streams[n_stream]);
+            assert(sink);
+            set_track_recorder_sink(track, sink);
+            n_stream++;
+        }
+    }
+
+    talloc_free(streams);
+    talloc_free(attachments);
 }
