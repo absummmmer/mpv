@@ -222,7 +222,7 @@ static char *get_term_status_msg(struct MPContext *mpctx)
                 char *r = mp_property_expand_string(mpctx,
                                             "${?vsync-ratio:${vsync-ratio}}");
                 if (r[0]) {
-                    saddf(&line, " DS: %s/%"PRId64, r,
+                    saddf(&line, " VS: %s/%"PRId64, r,
                           vo_get_delayed_count(mpctx->video_out));
                 }
                 talloc_free(r);
@@ -233,7 +233,7 @@ static char *get_term_status_msg(struct MPContext *mpctx)
             int dropped_frames =
                 dec ? mp_decoder_wrapper_get_frames_dropped(dec) : 0;
             if (c > 0 || dropped_frames > 0) {
-                saddf(&line, " Dropped: %"PRId64, c);
+                saddf(&line, " DP: %"PRId64, c);
                 if (dropped_frames)
                     saddf(&line, "/%d", dropped_frames);
             }
@@ -241,7 +241,7 @@ static char *get_term_status_msg(struct MPContext *mpctx)
     }
 
     if (mpctx->demuxer && demux_is_network_cached(mpctx->demuxer)) {
-        saddf(&line, " Cache: ");
+        saddf(&line, " BH: ");
 
         struct demux_reader_state s;
         demux_get_reader_state(mpctx->demuxer, &s);
