@@ -15,6 +15,7 @@
 local utils = require 'mp.utils'
 local options = require 'mp.options'
 local assdraw = require 'mp.assdraw'
+local message = require 'mp.msg'
 
 -- Default options
 local opts = {
@@ -27,6 +28,7 @@ local opts = {
     -- Set the font size used for the REPL and the console. This will be
     -- multiplied by "scale."
     font_size = 16,
+    console_width = 72,
 }
 
 function detect_platform()
@@ -75,6 +77,13 @@ update_timer = mp.add_periodic_timer(0.05, function()
     end
 end)
 update_timer:kill()
+
+local keep_timer = nil
+local keep_duration = mp.get_property_native("osd-duration", 1) / 2
+keep_timer = mp.add_periodic_timer(keep_duration, function()
+    update()
+end)
+keep_timer:kill()
 
 utils.shared_script_property_observe("osc-margins", function(_, val)
     if val then
@@ -129,71 +138,121 @@ end
 function update()
     pending_update = false
 
-    local dpi_scale = mp.get_property_native("display-hidpi-scale", 1.0)
+    if mp.get_property_bool("vo-configured") then
+        keep_timer:kill()
+        mp.osd_message("")
+        local dpi_scale = mp.get_property_native("display-hidpi-scale", 1.0)
 
-    dpi_scale = dpi_scale * opts.scale
+        dpi_scale = dpi_scale * opts.scale
 
-    local screenx, screeny, aspect = mp.get_osd_size()
-    screenx = screenx / dpi_scale
-    screeny = screeny / dpi_scale
+        local screenx, screeny, aspect = mp.get_osd_size()
+        screenx = screenx / dpi_scale
+        screeny = screeny / dpi_scale
 
-    -- Clear the OSD if the REPL is not active
-    if not repl_active then
-        mp.set_osd_ass(screenx, screeny, '')
-        return
+        -- Clear the OSD if the REPL is not active
+        if not repl_active then
+            mp.set_osd_ass(screenx, screeny, '')
+            return
+        end
+
+        local ass = assdraw.ass_new()
+        local style = '{\\r' ..
+                      '\\1a&H00&\\3a&H00&\\4a&H99&' ..
+                      '\\1c&Heeeeee&\\3c&H111111&\\4c&H000000&' ..
+                      '\\fn' .. opts.font .. '\\fs' .. opts.font_size ..
+                      '\\bord1\\xshad0\\yshad1\\fsp0\\q1}'
+        -- Create the cursor glyph as an ASS drawing. ASS will draw the cursor
+        -- inline with the surrounding text, but it sets the advance to the width
+        -- of the drawing. So the cursor doesn't affect layout too much, make it as
+        -- thin as possible and make it appear to be 1px wide by giving it 0.5px
+        -- horizontal borders.
+        local cheight = opts.font_size * 8
+        local cglyph = '{\\r' ..
+                       '\\1a&H44&\\3a&H44&\\4a&H99&' ..
+                       '\\1c&Heeeeee&\\3c&Heeeeee&\\4c&H000000&' ..
+                       '\\xbord0.5\\ybord0\\xshad0\\yshad1\\p4\\pbo24}' ..
+                       'm 0 0 l 1 0 l 1 ' .. cheight .. ' l 0 ' .. cheight ..
+                       '{\\p0}'
+        local before_cur = ass_escape(line:sub(1, cursor - 1))
+        local after_cur = ass_escape(line:sub(cursor))
+
+        -- Render log messages as ASS. This will render at most screeny / font_size
+        -- messages.
+        local log_ass = ''
+        local log_messages = #log_buffer
+        local log_max_lines = math.ceil(screeny / opts.font_size)
+        if log_max_lines < log_messages then
+            log_messages = log_max_lines
+        end
+        for i = #log_buffer - log_messages + 1, #log_buffer do
+            log_ass = log_ass .. style .. log_buffer[i].style .. ass_escape(log_buffer[i].text)
+        end
+
+        ass:new_event()
+        ass:an(1)
+        ass:pos(2, screeny - 2 - global_margin_y * screeny)
+        ass:append(log_ass .. '\\N')
+        ass:append(style .. '> ' .. before_cur)
+        ass:append(cglyph)
+        ass:append(style .. after_cur)
+
+        -- Redraw the cursor with the REPL text invisible. This will make the
+        -- cursor appear in front of the text.
+        ass:new_event()
+        ass:an(1)
+        ass:pos(2, screeny - 2)
+        ass:append(style .. '{\\alpha&HFF&}> ' .. before_cur)
+        ass:append(cglyph)
+        ass:append(style .. '{\\alpha&HFF&}' .. after_cur)
+
+        mp.set_osd_ass(screenx, screeny, ass.text)
+    else
+        if not repl_active then
+            keep_timer:kill()
+            mp.osd_message("")
+            return
+        end
+        local before_cursor = line:sub(1, cursor - 1)
+        local after_cursor = line:sub(cursor)
+        local cursor_printed = false
+        local cursor_cpos = 1
+        local display = '>>> '
+        for i = 1, math.ceil(#line / opts.console_width) do
+            if i > 1 then
+                display = display .. '... '
+            end
+            if #before_cursor < opts.console_width then
+                display = display .. before_cursor
+                cursor_cpos = #before_cursor
+                before_cursor = ''
+            else
+                display = display .. before_cursor:sub(1, opts.console_width - 1) .. '\n'
+                before_cursor = before_cursor:sub(opts.console_width)
+                cursor_cpos = 1
+            end
+            if #before_cursor == 0 then
+                if #after_cursor > 0 and not cursor_printed then
+                    display = display .. '|'
+                    cursor_printed = true
+                end
+                if #after_cursor < (opts.console_width - cursor_cpos) then
+                    display = display .. after_cursor
+                    after_cursor = ''
+                    break
+                else
+                    display = display .. after_cursor:sub(1, opts.console_width - cursor_cpos - 1) .. '\n'
+                    after_cursor = after_cursor:sub(opts.console_width - cursor_cpos)
+                    cursor_cpos = 1
+                end
+            end
+        end
+        if not keep_timer.is_enabled() then
+            keep_timer:resume()
+        else
+            pending_update = true
+        end
+        mp.osd_message(display, keep_duration)
     end
-
-    local ass = assdraw.ass_new()
-    local style = '{\\r' ..
-                  '\\1a&H00&\\3a&H00&\\4a&H99&' ..
-                  '\\1c&Heeeeee&\\3c&H111111&\\4c&H000000&' ..
-                  '\\fn' .. opts.font .. '\\fs' .. opts.font_size ..
-                  '\\bord1\\xshad0\\yshad1\\fsp0\\q1}'
-    -- Create the cursor glyph as an ASS drawing. ASS will draw the cursor
-    -- inline with the surrounding text, but it sets the advance to the width
-    -- of the drawing. So the cursor doesn't affect layout too much, make it as
-    -- thin as possible and make it appear to be 1px wide by giving it 0.5px
-    -- horizontal borders.
-    local cheight = opts.font_size * 8
-    local cglyph = '{\\r' ..
-                   '\\1a&H44&\\3a&H44&\\4a&H99&' ..
-                   '\\1c&Heeeeee&\\3c&Heeeeee&\\4c&H000000&' ..
-                   '\\xbord0.5\\ybord0\\xshad0\\yshad1\\p4\\pbo24}' ..
-                   'm 0 0 l 1 0 l 1 ' .. cheight .. ' l 0 ' .. cheight ..
-                   '{\\p0}'
-    local before_cur = ass_escape(line:sub(1, cursor - 1))
-    local after_cur = ass_escape(line:sub(cursor))
-
-    -- Render log messages as ASS. This will render at most screeny / font_size
-    -- messages.
-    local log_ass = ''
-    local log_messages = #log_buffer
-    local log_max_lines = math.ceil(screeny / opts.font_size)
-    if log_max_lines < log_messages then
-        log_messages = log_max_lines
-    end
-    for i = #log_buffer - log_messages + 1, #log_buffer do
-        log_ass = log_ass .. style .. log_buffer[i].style .. ass_escape(log_buffer[i].text)
-    end
-
-    ass:new_event()
-    ass:an(1)
-    ass:pos(2, screeny - 2 - global_margin_y * screeny)
-    ass:append(log_ass .. '\\N')
-    ass:append(style .. '> ' .. before_cur)
-    ass:append(cglyph)
-    ass:append(style .. after_cur)
-
-    -- Redraw the cursor with the REPL text invisible. This will make the
-    -- cursor appear in front of the text.
-    ass:new_event()
-    ass:an(1)
-    ass:pos(2, screeny - 2)
-    ass:append(style .. '{\\alpha&HFF&}> ' .. before_cur)
-    ass:append(cglyph)
-    ass:append(style .. '{\\alpha&HFF&}' .. after_cur)
-
-    mp.set_osd_ass(screenx, screeny, ass.text)
 end
 
 -- Set the REPL visibility ("enable", Esc)
@@ -343,6 +402,7 @@ function help_command(param)
             end
         end
         if not cmd then
+            message.warn('No command matches "' .. param .. '"!')
             log_add(error_style, 'No command matches "' .. param .. '"!')
             return
         end
@@ -358,6 +418,7 @@ function help_command(param)
             output = output .. 'This command supports variable arguments.\n'
         end
     end
+    message.info(output)
     log_add('', output)
 end
 
@@ -366,6 +427,7 @@ function handle_enter()
     if line == '' then
         return
     end
+    message.verbose(line)
     if history[#history] ~= line then
         history[#history + 1] = line
     end
@@ -804,3 +866,9 @@ mp.register_event('log-message', function(e)
 end)
 
 collectgarbage()
+
+mp.observe_property("vo-configured", "bool", function (name, value)
+    if repl_active then
+        update()
+    end
+end)
