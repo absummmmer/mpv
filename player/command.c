@@ -75,6 +75,8 @@
 
 #include "core.h"
 
+#include "term_status.h" // only for mp_property_status_line
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -3245,6 +3247,25 @@ static int mp_property_packet_bitrate(void *ctx, struct m_property *prop,
     return m_property_int64_ro(action, arg, llrint(rate));
 }
 
+static int mp_property_status_line(void *ctx, struct m_property *prop,
+                                   int action, void *arg)
+{
+    struct MPContext *mpctx = ctx;
+    switch (action) {
+    case M_PROPERTY_GET: {
+        char *line = mp_get_term_status_line(mpctx);
+        if (!line)
+            return M_PROPERTY_ERROR;
+        *(char **)arg = line;
+        return M_PROPERTY_OK;
+    }
+    case M_PROPERTY_GET_TYPE:
+        *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_STRING};
+        return M_PROPERTY_OK;
+    }
+    return M_PROPERTY_NOT_IMPLEMENTED;
+}
+
 static int mp_property_cwd(void *ctx, struct m_property *prop,
                            int action, void *arg)
 {
@@ -3873,6 +3894,8 @@ static const struct m_property mp_properties_base[] = {
     {"playlist-current-pos", mp_property_playlist_current_pos},
     {"playlist-playing-pos", mp_property_playlist_playing_pos},
     M_PROPERTY_ALIAS("playlist-count", "playlist/count"),
+
+    {"term-status-line", mp_property_status_line},
 
     // Audio
     {"mixer-active", mp_property_mixer_active},

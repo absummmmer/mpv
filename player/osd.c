@@ -44,6 +44,8 @@
 #include "core.h"
 #include "command.h"
 
+#include "term_status.h" // only for mp_get_term_status_line
+
 #define saddf(var, ...) (*(var) = talloc_asprintf_append((*var), __VA_ARGS__))
 
 // append time in the hh:mm:ss format (plus fractions if wanted)
@@ -283,6 +285,11 @@ static char *get_term_status_msg(struct MPContext *mpctx)
     }
 
     return line;
+}
+
+char *mp_get_term_status_line(struct MPContext *mpctx)
+{
+    return get_term_status_msg(mpctx);
 }
 
 static void term_osd_print_status_lazy(struct MPContext *mpctx)
